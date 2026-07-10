@@ -1,0 +1,552 @@
+const std = @import("std");
+const opcode = @import("opcodes.zig");
+
+const FLAG_ZERO: u8 = 0b10000000;
+const FLAG_SUB: u8 = 0b01000000;
+const FLAG_HC: u8 = 0b00100000;
+const FLAG_CARRY: u8 = 0b00010000;
+
+const BitOps = enum {
+    and_,
+    xor_,
+    or_,
+};
+
+const Conditions = enum { z, c, nz, nc };
+const Jumps = enum { jump, relative, call, ret };
+
+pub const CPU = struct {
+    a: u8 = 0,
+    b: u8 = 0,
+    c: u8 = 0,
+    d: u8 = 0,
+    e: u8 = 0,
+    h: u8 = 0,
+    l: u8 = 0,
+
+    // flag register bits
+    // 7: zero
+    // 6: substraction
+    // 5: half carry
+    // 4: carry
+    f: u8 = 0,
+
+    sp: u16 = 0,
+    pc: u16 = 0,
+    ime: bool = false,
+
+    pub fn get_af(self: CPU) u16 {
+        return (@as(u16, self.a) << 8) | self.f;
+    }
+
+    pub fn get_bc(self: CPU) u16 {
+        return (@as(u16, self.b) << 8) | self.c;
+    }
+
+    pub fn get_de(self: CPU) u16 {
+        return (@as(u16, self.d) << 8) | self.e;
+    }
+
+    pub fn get_hl(self: CPU) u16 {
+        return (@as(u16, self.h) << 8) | self.l;
+    }
+
+    pub fn set_af(self: *CPU, value: u16) void {
+        self.a = @intCast(value >> 8);
+        self.f = @intCast(value & 0xF0);
+    }
+
+    pub fn set_bc(self: *CPU, value: u16) void {
+        self.b = @intCast(value >> 8);
+        self.c = @intCast(value & 0xFF);
+    }
+
+    pub fn set_de(self: *CPU, value: u16) void {
+        self.d = @intCast(value >> 8);
+        self.e = @intCast(value & 0xFF);
+    }
+
+    pub fn set_hl(self: *CPU, value: u16) void {
+        self.h = @intCast(value >> 8);
+        self.l = @intCast(value & 0xFF);
+    }
+
+    pub fn set_flag(self: *CPU, flag: u8) void {
+        self.f |= flag;
+    }
+
+    pub fn unset_flag(self: *CPU, flag: u8) void {
+        self.f &= ~flag;
+    }
+
+    pub fn get_flag(self: *CPU, flag: u8) u8 {
+        return self.f & flag;
+    }
+};
+
+pub const GameBoy = struct {
+    memory: [65536]u8 = std.mem.zeroes([65536]u8),
+    cpu: CPU = CPU{},
+    rom: []u8,
+
+    // helper functions
+    pub fn readByte(self: *GameBoy, address: u16) u8 {
+        switch (address) {
+            0x0000...0x7FFF => return self.rom[@as(usize, address)],
+            else => return self.memory[address],
+            // todo: add vram and stuff
+        }
+    }
+
+    pub fn writeByte(self: *GameBoy, address: u16, value: u8) void {
+        // rom banking areas (todo: mbc)
+        if (address < 0x8000) {
+            // todo: bank switching
+            return;
+        }
+        self.memory[address] = value;
+    }
+
+    pub fn readu16(self: *GameBoy, address: u16) u16 {
+        const low = self.readByte(address);
+        const high = self.readByte(address + 1);
+        return (@as(u16, high) << 8) | low;
+    }
+
+    // stack stuff
+    pub fn push_u16(self: *GameBoy, value: u16) void {
+        const high: u8 = @intCast(value >> 8);
+        const low: u8 = @intCast(value & 0xFF);
+        self.cpu.sp -= 1;
+        self.writeByte(self.cpu.sp, high);
+        self.cpu.sp -= 1;
+        self.writeByte(self.cpu.sp, low);
+    }
+
+    pub fn pop_u16(self: *GameBoy) u16 {
+        const low: u8 = self.readByte(self.cpu.sp);
+        self.cpu.sp += 1;
+        const high: u8 = self.readByte(self.cpu.sp);
+        self.cpu.sp += 1;
+        const value: u16 = (@as(u16, high) << 8) | low;
+        return value;
+    }
+
+    const OpcodeFn = *const fn (gb: *GameBoy) void;
+    pub const dispatch_table: [256]OpcodeFn = init_dispatch_table();
+
+    // generators
+    // LD reg reg
+    fn ldGen(comptime dst: []const u8, comptime src: []const u8) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                @field(gb.cpu, dst) = @field(gb.cpu, src);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+    // LD reg hl
+    fn ldRHLGen(comptime dst: []const u8) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                @field(gb.cpu, dst) = gb.readByte(gb.cpu.get_hl());
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    // LD hl reg
+    fn ldHLRGen(comptime src: []const u8) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                gb.writeByte(gb.cpu.get_hl(), @field(gb.cpu, src));
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    // DEC reg (single)
+    fn decGen(comptime dst: []const u8) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const old: u8 = @field(gb.cpu, dst);
+                @field(gb.cpu, dst) -%= 1;
+
+                // flags
+                gb.cpu.set_flag(FLAG_SUB);
+                if (@field(gb.cpu, dst) == 0) {
+                    gb.cpu.set_flag(FLAG_ZERO);
+                } else {
+                    gb.cpu.unset_flag(FLAG_ZERO);
+                }
+                if ((old & 0x0F) == 0) {
+                    gb.cpu.set_flag(FLAG_HC);
+                } else {
+                    gb.cpu.unset_flag(FLAG_HC);
+                }
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    // DEC reg (pair)
+    fn decGenPair(comptime get: anytype, comptime set: anytype) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value = get(gb.cpu);
+                set(&gb.cpu, value -% 1);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    // INC reg (single)
+    fn incGen(comptime dst: []const u8) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const old: u8 = @field(gb.cpu, dst);
+                @field(gb.cpu, dst) +%= 1;
+
+                // flags
+                gb.cpu.unset_flag(FLAG_SUB);
+                if (@field(gb.cpu, dst) == 0) {
+                    gb.cpu.set_flag(FLAG_ZERO);
+                } else {
+                    gb.cpu.unset_flag(FLAG_ZERO);
+                }
+                if ((old & 0x0F) == 0x0F) {
+                    gb.cpu.set_flag(FLAG_HC);
+                } else {
+                    gb.cpu.unset_flag(FLAG_HC);
+                }
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn incGenPair(comptime get: anytype, comptime set: anytype) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value = get(gb.cpu);
+                set(&gb.cpu, value +% 1);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    // push/pop
+    fn pushGen(comptime get: anytype) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value = get(gb.cpu);
+                push_u16(gb, value);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn popGen(comptime set: anytype) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value = pop_u16(gb);
+                set(&gb.cpu, value);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn bitwiseGen(comptime src: []const u8, comptime operation: BitOps) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                switch (operation) {
+                    .and_ => {
+                        gb.cpu.a &= @field(gb.cpu, src);
+                    },
+                    .xor_ => {
+                        gb.cpu.a ^= @field(gb.cpu, src);
+                    },
+                    .or_ => {
+                        gb.cpu.a |= @field(gb.cpu, src);
+                    },
+                }
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn conditionalJumpGen(comptime jump: Jumps, comptime condition: Conditions) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+
+                // check condition
+                var should_jump: bool = false;
+                switch (condition) {
+                    .z => should_jump = gb.cpu.get_flag(FLAG_ZERO) != 0,
+                    .nz => should_jump = gb.cpu.get_flag(FLAG_ZERO) == 0,
+                    .c => should_jump = gb.cpu.get_flag(FLAG_CARRY) != 0,
+                    .nc => should_jump = gb.cpu.get_flag(FLAG_CARRY) == 0,
+                }
+
+                if (!should_jump) {
+                    switch (jump) {
+                        .jump => {
+                            gb.cpu.pc += 3;
+                        },
+                        .relative => {
+                            gb.cpu.pc += 2;
+                        },
+                        .ret => {
+                            gb.cpu.pc += 1;
+                        },
+                        .call => {
+                            gb.cpu.pc += 3;
+                        },
+                    }
+                } else {
+                    switch (jump) {
+                        .jump => {
+                            const address: u16 = gb.readu16(gb.cpu.pc + 1);
+                            gb.cpu.pc = address;
+                        },
+                        .relative => {
+                            const pc: i16 = @intCast(gb.cpu.pc);
+                            const offset: i16 = @intCast(@as(i8, @bitCast(gb.readByte(gb.cpu.pc + 1))));
+                            gb.cpu.pc = @intCast(pc + 2 + offset);
+                        },
+                        .ret => {
+                            const address: u16 = gb.pop_u16();
+                            gb.cpu.pc = address;
+                        },
+                        .call => {
+                            const jp: u16 = gb.readu16(gb.cpu.pc + 1);
+                            gb.push_u16(gb.cpu.pc + 3);
+                            gb.cpu.pc = jp;
+                        },
+                    }
+                }
+            }
+        }.f;
+    }
+
+    // opcode handling
+    fn init_dispatch_table() [256]OpcodeFn {
+        var table: [256]OpcodeFn = undefined;
+        inline for (0..256) |i| {
+            table[i] = invalidOpcode;
+        }
+
+        table[0x00] = opcode.nop;
+        // LD {register}, u8
+        table[0x31] = opcode.ldsp;
+        table[0x3E] = opcode.lda;
+        table[0x06] = opcode.ldb;
+        table[0x0E] = opcode.ldc;
+        table[0x16] = opcode.ldd;
+        table[0x1E] = opcode.lde;
+        table[0x26] = opcode.ldh;
+        table[0x2E] = opcode.ldl;
+        // LD {register pair}, u16
+        table[0x01] = opcode.ldbc;
+        table[0x11] = opcode.ldde;
+        table[0x21] = opcode.ldhl;
+        // LD {address}, {register}
+        table[0xE0] = opcode.loadmem_ffval;
+        table[0xEA] = opcode.loadmem_a;
+        // LD {register}, {register}
+        // dst A
+        table[0x78] = ldGen("a", "b");
+        table[0x79] = ldGen("a", "c");
+        table[0x7A] = ldGen("a", "d");
+        table[0x7B] = ldGen("a", "e");
+        table[0x7C] = ldGen("a", "h");
+        table[0x7D] = ldGen("a", "l");
+        table[0x7F] = ldGen("a", "a");
+        // dst B
+        table[0x40] = ldGen("b", "b");
+        table[0x41] = ldGen("b", "c");
+        table[0x42] = ldGen("b", "d");
+        table[0x43] = ldGen("b", "e");
+        table[0x44] = ldGen("b", "h");
+        table[0x45] = ldGen("b", "l");
+        table[0x47] = ldGen("b", "a");
+        // dst C
+        table[0x48] = ldGen("c", "b");
+        table[0x49] = ldGen("c", "c");
+        table[0x4A] = ldGen("c", "d");
+        table[0x4B] = ldGen("c", "e");
+        table[0x4C] = ldGen("c", "h");
+        table[0x4D] = ldGen("c", "l");
+        table[0x4F] = ldGen("c", "a");
+        // dst D
+        table[0x50] = ldGen("d", "b");
+        table[0x51] = ldGen("d", "c");
+        table[0x52] = ldGen("d", "d");
+        table[0x53] = ldGen("d", "e");
+        table[0x54] = ldGen("d", "h");
+        table[0x55] = ldGen("d", "l");
+        table[0x57] = ldGen("d", "a");
+        // dst E
+        table[0x58] = ldGen("e", "b");
+        table[0x59] = ldGen("e", "c");
+        table[0x5A] = ldGen("e", "d");
+        table[0x5B] = ldGen("e", "e");
+        table[0x5C] = ldGen("e", "h");
+        table[0x5D] = ldGen("e", "l");
+        table[0x5F] = ldGen("e", "a");
+        // dst H
+        table[0x60] = ldGen("h", "b");
+        table[0x61] = ldGen("h", "c");
+        table[0x62] = ldGen("h", "d");
+        table[0x63] = ldGen("h", "e");
+        table[0x64] = ldGen("h", "h");
+        table[0x65] = ldGen("h", "l");
+        table[0x67] = ldGen("h", "a");
+        // dst L
+        table[0x68] = ldGen("l", "b");
+        table[0x69] = ldGen("l", "c");
+        table[0x6A] = ldGen("l", "d");
+        table[0x6B] = ldGen("l", "e");
+        table[0x6C] = ldGen("l", "h");
+        table[0x6D] = ldGen("l", "l");
+        table[0x6F] = ldGen("l", "a");
+        // LD {register}, address HL
+        table[0x46] = ldRHLGen("b");
+        table[0x4E] = ldRHLGen("c");
+        table[0x56] = ldRHLGen("d");
+        table[0x5E] = ldRHLGen("e");
+        table[0x66] = ldRHLGen("h");
+        table[0x6E] = ldRHLGen("l");
+        table[0x7E] = ldRHLGen("a");
+        // LD address HL, {register}
+        table[0x70] = ldHLRGen("b");
+        table[0x71] = ldHLRGen("c");
+        table[0x72] = ldHLRGen("d");
+        table[0x73] = ldHLRGen("e");
+        table[0x74] = ldHLRGen("h");
+        table[0x75] = ldHLRGen("l");
+        table[0x77] = ldHLRGen("a");
+        // LD A, address HL+-
+        table[0x2A] = opcode.lda_hlp;
+        table[0x3A] = opcode.lda_hlm;
+        // PUSH
+        table[0xC5] = pushGen(CPU.get_bc);
+        table[0xD5] = pushGen(CPU.get_de);
+        table[0xE5] = pushGen(CPU.get_hl);
+        table[0xF5] = pushGen(CPU.get_af);
+        // POP
+        table[0xC1] = popGen(CPU.set_bc);
+        table[0xD1] = popGen(CPU.set_de);
+        table[0xE1] = popGen(CPU.set_hl);
+        table[0xF1] = popGen(CPU.set_af);
+        // ARITHMETIC
+        // INC single
+        table[0x04] = incGen("b");
+        table[0x0C] = incGen("c");
+        table[0x14] = incGen("d");
+        table[0x1C] = incGen("e");
+        table[0x24] = incGen("h");
+        table[0x2C] = incGen("l");
+        table[0x3C] = incGen("a");
+        // INC pairs
+        table[0x03] = incGenPair(CPU.get_bc, CPU.set_bc);
+        table[0x13] = incGenPair(CPU.get_de, CPU.set_de);
+        table[0x23] = incGenPair(CPU.get_hl, CPU.set_hl);
+        table[0x33] = opcode.inc_sp;
+        // INC mem
+        table[0x34] = opcode.incmem_hl;
+        // DEC single
+        table[0x05] = decGen("b");
+        table[0x0D] = decGen("c");
+        table[0x15] = decGen("d");
+        table[0x1D] = decGen("e");
+        table[0x25] = decGen("h");
+        table[0x2D] = decGen("l");
+        table[0x3D] = decGen("a");
+        // DEC pairs
+        table[0x0B] = decGenPair(CPU.get_bc, CPU.set_bc);
+        table[0x1B] = decGenPair(CPU.get_de, CPU.set_de);
+        table[0x2B] = decGenPair(CPU.get_hl, CPU.set_hl);
+        table[0x3B] = opcode.dec_sp;
+        // bitwise
+        table[0xA0] = bitwiseGen("b", .and_);
+        table[0xA1] = bitwiseGen("c", .and_);
+        table[0xA2] = bitwiseGen("d", .and_);
+        table[0xA3] = bitwiseGen("e", .and_);
+        table[0xA4] = bitwiseGen("h", .and_);
+        table[0xA5] = bitwiseGen("l", .and_);
+        // table[0xA6] = opcode.and_hl;
+        table[0xA7] = bitwiseGen("a", .and_);
+        table[0xA8] = bitwiseGen("b", .xor_);
+        table[0xA9] = bitwiseGen("c", .xor_);
+        table[0xAA] = bitwiseGen("d", .xor_);
+        table[0xAB] = bitwiseGen("e", .xor_);
+        table[0xAC] = bitwiseGen("h", .xor_);
+        table[0xAD] = bitwiseGen("l", .xor_);
+        // table[0xAE] = opcode.xor_hl;
+        table[0xAF] = bitwiseGen("a", .xor_);
+        table[0xB0] = bitwiseGen("b", .or_);
+        table[0xB1] = bitwiseGen("c", .or_);
+        table[0xB2] = bitwiseGen("d", .or_);
+        table[0xB3] = bitwiseGen("e", .or_);
+        table[0xB4] = bitwiseGen("h", .or_);
+        table[0xB5] = bitwiseGen("l", .or_);
+        // table[0xB6] = opcode.or_hl;
+        table[0xB7] = bitwiseGen("a", .and_);
+        // JP
+        table[0x18] = opcode.jr;
+        table[0xC3] = opcode.jp;
+        // conditional jumps
+        table[0xCA] = conditionalJumpGen(.jump, .z);
+        table[0xC2] = conditionalJumpGen(.jump, .nz);
+        table[0xDA] = conditionalJumpGen(.jump, .c);
+        table[0xD2] = conditionalJumpGen(.jump, .nc);
+        table[0x28] = conditionalJumpGen(.relative, .z);
+        table[0x38] = conditionalJumpGen(.relative, .nz);
+        table[0x20] = conditionalJumpGen(.relative, .c);
+        table[0x30] = conditionalJumpGen(.relative, .nc);
+        table[0xCC] = conditionalJumpGen(.call, .z);
+        table[0xC4] = conditionalJumpGen(.call, .nz);
+        table[0xDC] = conditionalJumpGen(.call, .c);
+        table[0xD4] = conditionalJumpGen(.call, .nc);
+        table[0xC8] = conditionalJumpGen(.ret, .z);
+        table[0xC0] = conditionalJumpGen(.ret, .nz);
+        table[0xD8] = conditionalJumpGen(.ret, .c);
+        table[0xD0] = conditionalJumpGen(.ret, .nc);
+        // interrupts
+        table[0xF3] = opcode.di;
+        // CALLs
+        table[0xC9] = opcode.ret;
+        table[0xCD] = opcode.call;
+
+        return table;
+    }
+
+    fn invalidOpcode(gb: *GameBoy) void {
+        std.debug.panic("Unimplemented opcode at: 0x{X:04}\n", .{gb.cpu.pc});
+    }
+
+    pub fn step(gb: *GameBoy, opcode_value: u8) void {
+        dispatch_table[opcode_value](gb);
+    }
+};
+
+pub fn main(rom: []u8) !void {
+    var gb = GameBoy{
+        .rom = rom,
+    };
+
+    // insert cartdrige
+    gb.memory[0x0100] = 0x00;
+    gb.cpu.pc = 0x0100;
+    gb.cpu.sp = 0xFFFe;
+
+    std.debug.print("Game Boy initialized!\n", .{});
+
+    while (true) {
+        std.debug.print("PC at: 0x{X:0>4}\n", .{gb.cpu.pc});
+
+        const opcode_value = gb.readByte(gb.cpu.pc);
+        std.debug.print("Fetched opcode: 0x{X:0>2}\n", .{opcode_value});
+        gb.step(opcode_value);
+    }
+}
