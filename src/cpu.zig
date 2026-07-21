@@ -1131,6 +1131,11 @@ pub const GameBoy = struct {
         // CALLs
         table[0xC9] = opcode.ret;
         table[0xCD] = opcode.call;
+        // rotations
+        table[0x07] = opcode.rlca;
+        table[0x0F] = opcode.rrca;
+        table[0x17] = opcode.rla;
+        table[0x1F] = opcode.rra;
 
         return table;
     }

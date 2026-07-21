@@ -182,6 +182,89 @@ pub fn inc_sp(gb: *gb_mod.GameBoy) void {
     gb.cpu.sp +%= 1;
 }
 
+// rotations
+pub fn rlca(gb: *gb_mod.GameBoy) void {
+    const old: u8 = gb.cpu.a >> 7;
+    gb.cpu.a <<= 1;
+    gb.cpu.a |= old;
+
+    if (old == 0) {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.set_flag(FLAG_CARRY);
+    }
+
+    if (gb.cpu.a == 0) {
+        gb.cpu.set_flag(FLAG_ZERO);
+    } else {
+        gb.cpu.unset_flag(FLAG_ZERO);
+    }
+    gb.cpu.unset_flag(FLAG_SUB);
+    gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
+pub fn rla(gb: *gb_mod.GameBoy) void {
+    const flag_bit: u8 = @intFromBool(gb.cpu.get_flag(FLAG_CARRY) != 0);
+    const old: u8 = gb.cpu.a >> 7;
+    gb.cpu.a <<= 1;
+    gb.cpu.a |= flag_bit;
+    if (old == 1) {
+        gb.cpu.set_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    }
+    if (gb.cpu.a == 0) {
+        gb.cpu.set_flag(FLAG_ZERO);
+    } else {
+        gb.cpu.unset_flag(FLAG_ZERO);
+    }
+    gb.cpu.unset_flag(FLAG_SUB);
+    gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
+pub fn rrca(gb: *gb_mod.GameBoy) void {
+    const old: u8 = gb.cpu.a & 0b1;
+    gb.cpu.a >>= 1;
+    gb.cpu.a |= (old << 7);
+
+    if (old == 0) {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.set_flag(FLAG_CARRY);
+    }
+
+    if (gb.cpu.a == 0) {
+        gb.cpu.set_flag(FLAG_ZERO);
+    } else {
+        gb.cpu.unset_flag(FLAG_ZERO);
+    }
+    gb.cpu.unset_flag(FLAG_SUB);
+    gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
+pub fn rra(gb: *gb_mod.GameBoy) void {
+    const flag_bit: u8 = @intFromBool(gb.cpu.get_flag(FLAG_CARRY) != 0);
+    const old: u8 = gb.cpu.a & 0b1;
+    gb.cpu.a >>= 1;
+    gb.cpu.a |= (flag_bit << 7);
+    if (old == 1) {
+        gb.cpu.set_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    }
+    if (gb.cpu.a == 0) {
+        gb.cpu.set_flag(FLAG_ZERO);
+    } else {
+        gb.cpu.unset_flag(FLAG_ZERO);
+    }
+    gb.cpu.unset_flag(FLAG_SUB);
+    gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
 // jumps
 pub fn jr(gb: *gb_mod.GameBoy) void {
     const pc: i16 = @intCast(gb.cpu.pc);

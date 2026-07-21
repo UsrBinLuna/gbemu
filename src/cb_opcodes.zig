@@ -27,6 +27,9 @@ pub fn cbOpcodes(gb: *gb_mod.GameBoy) void {
     const pre: u8 = op >> 6; // 0b11000000
     const operator: u3 = @truncate((op >> 3) & 0b111); // 0b00111000
     const idx: u3 = @truncate(op & 0b111); // 0b00000111
+    if (idx == 0b110) {
+        return;
+    }
     const reg = getRegister(gb, idx);
 
     if (pre == 0b01) {
