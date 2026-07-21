@@ -85,6 +85,49 @@ pub fn lda_hlm(gb: *gb_mod.GameBoy) void {
     gb.cpu.pc += 1;
 }
 
+pub fn ldhlp_a(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.cpu.get_hl();
+    gb.writeByte(address, gb.cpu.a);
+    gb.cpu.set_hl(address +% 1);
+    gb.cpu.pc += 1;
+}
+
+pub fn ldhlm_a(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.cpu.get_hl();
+    gb.writeByte(address, gb.cpu.a);
+    gb.cpu.set_hl(address -% 1);
+    gb.cpu.pc += 1;
+}
+
+pub fn lda_ffu8(gb: *gb_mod.GameBoy) void {
+    const offset: u8 = gb.readByte(gb.cpu.pc + 1);
+    const address: u16 = 0xFF00 + @as(u16, offset);
+    const value: u8 = gb.readByte(address);
+    gb.cpu.a = value;
+    gb.cpu.pc += 2;
+}
+
+pub fn lda_u16(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.readu16(gb.cpu.pc + 1);
+    const value: u8 = gb.readByte(address);
+    gb.cpu.a = value;
+    gb.cpu.pc += 3;
+}
+
+pub fn lda_bc(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.cpu.get_bc();
+    const value: u8 = gb.readByte(address);
+    gb.cpu.a = value;
+    gb.cpu.pc += 1;
+}
+
+pub fn lda_de(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.cpu.get_de();
+    const value: u8 = gb.readByte(address);
+    gb.cpu.a = value;
+    gb.cpu.pc += 1;
+}
+
 // load reg to memory
 pub fn loadmem_a(gb: *gb_mod.GameBoy) void {
     const address: u16 = gb.readu16(gb.cpu.pc + 1);
@@ -98,6 +141,15 @@ pub fn loadmem_ffval(gb: *gb_mod.GameBoy) void {
     const address: u16 = 0xFF00 + @as(u16, offset);
     gb.writeByte(address, gb.cpu.a);
     gb.cpu.pc += 2;
+}
+
+pub fn ldu16_sp(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.readu16(gb.cpu.pc + 1);
+    const high: u8 = @intCast(gb.cpu.sp >> 8);
+    const low: u8 = @intCast(gb.cpu.sp & 0xFF);
+    gb.writeByte(address, low);
+    gb.writeByte(address + 1, high);
+    gb.cpu.pc += 3;
 }
 
 pub fn incmem_hl(gb: *gb_mod.GameBoy) void {

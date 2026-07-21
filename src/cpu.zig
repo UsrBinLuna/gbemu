@@ -1,5 +1,6 @@
 const std = @import("std");
 const opcode = @import("opcodes.zig");
+const cb = @import("cb_opcodes.zig");
 
 const FLAG_ZERO: u8 = 0b10000000;
 const FLAG_SUB: u8 = 0b01000000;
@@ -14,6 +15,7 @@ const BitOps = enum {
 
 const Conditions = enum { z, c, nz, nc };
 const Jumps = enum { jump, relative, call, ret };
+const Arithmetic = enum { add, sub, adc, sbc, cp };
 
 pub const CPU = struct {
     a: u8 = 0,
@@ -100,11 +102,16 @@ pub const GameBoy = struct {
 
     pub fn writeByte(self: *GameBoy, address: u16, value: u8) void {
         // rom banking areas (todo: mbc)
+        std.debug.print("WRITE {x} = {x}\n", .{ address, value });
         if (address < 0x8000) {
             // todo: bank switching
             return;
         }
         self.memory[address] = value;
+        if (address == 0xFF02 and value == 0x81) {
+            std.debug.print("{c}", .{self.memory[0xFF01]});
+            self.memory[0xFF02] = 0;
+        }
     }
 
     pub fn readu16(self: *GameBoy, address: u16) u16 {
@@ -261,15 +268,558 @@ pub const GameBoy = struct {
                 switch (operation) {
                     .and_ => {
                         gb.cpu.a &= @field(gb.cpu, src);
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.set_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
                     },
                     .xor_ => {
                         gb.cpu.a ^= @field(gb.cpu, src);
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
                     },
                     .or_ => {
                         gb.cpu.a |= @field(gb.cpu, src);
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
                     },
                 }
                 gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn bitwiseu8Gen(comptime operation: BitOps) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value: u8 = gb.readByte(gb.cpu.pc + 1);
+                switch (operation) {
+                    .and_ => {
+                        gb.cpu.a &= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.set_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                    .xor_ => {
+                        gb.cpu.a ^= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                    .or_ => {
+                        gb.cpu.a |= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                }
+                gb.cpu.pc += 2;
+            }
+        }.f;
+    }
+
+    fn bitwisehlGen(comptime operation: BitOps) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value: u8 = gb.readByte(gb.cpu.get_hl());
+                switch (operation) {
+                    .and_ => {
+                        gb.cpu.a &= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.set_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                    .xor_ => {
+                        gb.cpu.a ^= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                    .or_ => {
+                        gb.cpu.a |= value;
+                        if (gb.cpu.a == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+                        gb.cpu.unset_flag(FLAG_HC);
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        gb.cpu.unset_flag(FLAG_CARRY);
+                    },
+                }
+                gb.cpu.pc += 2;
+            }
+        }.f;
+    }
+
+    fn arithmeticGen(comptime dst: []const u8, comptime src: []const u8, comptime operation: Arithmetic) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                switch (operation) {
+                    .add => {
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + @as(u16, @field(gb.cpu, src));
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + (@field(gb.cpu, src) & 0x0F);
+                        @field(gb.cpu, dst) +%= @field(gb.cpu, src);
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sub => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (@field(gb.cpu, src) & 0x0F);
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = @field(gb.cpu, src);
+                        @field(gb.cpu, dst) -%= @field(gb.cpu, src);
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .adc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + @as(u16, @field(gb.cpu, src)) + @as(u16, carry);
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + (@field(gb.cpu, src) & 0x0F) + carry;
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) +% @field(gb.cpu, src) +% carry;
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sbc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (@field(gb.cpu, src) & 0x0F);
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = @field(gb.cpu, src);
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) -% @field(gb.cpu, src) -% carry;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src + carry) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low + carry) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .cp => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (@field(gb.cpu, src) & 0x0F);
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = @field(gb.cpu, src);
+                        const new_value: u8 = @field(gb.cpu, dst) -% @field(gb.cpu, src);
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (new_value == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                }
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
+    fn arithmeticu8Gen(comptime dst: []const u8, comptime operation: Arithmetic) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value: u8 = gb.readByte(gb.cpu.pc + 1);
+                switch (operation) {
+                    .add => {
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + value;
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + ((value) & 0x0F);
+                        @field(gb.cpu, dst) +%= value;
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sub => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value) & 0x0F;
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        @field(gb.cpu, dst) -%= value;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .adc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + @as(u16, value) + @as(u16, carry);
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + ((value) & 0x0F) + carry;
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) +% value +% carry;
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sbc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value) & 0x0F;
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) -% value -% carry;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src + carry) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low + carry) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .cp => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value & 0x0F);
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        const new_value: u8 = @field(gb.cpu, dst) -% value;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (new_value == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                }
+                gb.cpu.pc += 2;
+            }
+        }.f;
+    }
+
+    fn arithmetichlGen(comptime dst: []const u8, comptime operation: Arithmetic) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const value: u8 = gb.readByte(gb.cpu.get_hl());
+                switch (operation) {
+                    .add => {
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + value;
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + ((value) & 0x0F);
+                        @field(gb.cpu, dst) +%= value;
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sub => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value) & 0x0F;
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        @field(gb.cpu, dst) -%= value;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .adc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const true_sum: u16 = @as(u16, @field(gb.cpu, dst)) + @as(u16, value) + @as(u16, carry);
+                        const true_sum_low: u8 = (@field(gb.cpu, dst) & 0x0F) + ((value) & 0x0F) + carry;
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) +% value +% carry;
+
+                        // flags
+                        gb.cpu.unset_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (true_sum > 255) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (true_sum_low > 0x0F) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .sbc => {
+                        const carry: u8 = (gb.cpu.get_flag(FLAG_CARRY) >> 4) & 1;
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value) & 0x0F;
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        @field(gb.cpu, dst) = @field(gb.cpu, dst) -% value -% carry;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (@field(gb.cpu, dst) == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src + carry) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low + carry) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                    .cp => {
+                        const dst_low: u8 = (@field(gb.cpu, dst) & 0x0F);
+                        const src_low: u8 = (value & 0x0F);
+                        const old_dst = @field(gb.cpu, dst);
+                        const old_src = value;
+                        const new_value: u8 = @field(gb.cpu, dst) -% value;
+
+                        // flags
+                        gb.cpu.set_flag(FLAG_SUB);
+                        if (new_value == 0) {
+                            gb.cpu.set_flag(FLAG_ZERO);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_ZERO);
+                        }
+
+                        if (old_dst < old_src) {
+                            gb.cpu.set_flag(FLAG_CARRY);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_CARRY);
+                        }
+
+                        if (dst_low < src_low) {
+                            gb.cpu.set_flag(FLAG_HC);
+                        } else {
+                            gb.cpu.unset_flag(FLAG_HC);
+                        }
+                    },
+                }
+                gb.cpu.pc += 2;
             }
         }.f;
     }
@@ -352,6 +902,7 @@ pub const GameBoy = struct {
         // LD {address}, {register}
         table[0xE0] = opcode.loadmem_ffval;
         table[0xEA] = opcode.loadmem_a;
+        table[0xF0] = opcode.lda_ffu8;
         // LD {register}, {register}
         // dst A
         table[0x78] = ldGen("a", "b");
@@ -425,9 +976,19 @@ pub const GameBoy = struct {
         table[0x74] = ldHLRGen("h");
         table[0x75] = ldHLRGen("l");
         table[0x77] = ldHLRGen("a");
+        // LD A, register pair
+        table[0x0A] = opcode.lda_bc;
+        table[0x1A] = opcode.lda_de;
         // LD A, address HL+-
         table[0x2A] = opcode.lda_hlp;
         table[0x3A] = opcode.lda_hlm;
+        // LD address HL+-, A
+        table[0x22] = opcode.ldhlp_a;
+        table[0x32] = opcode.ldhlm_a;
+        // LD A, address u16
+        table[0xFA] = opcode.lda_u16;
+        // LD address u16, reg
+        table[0x08] = opcode.ldu16_sp;
         // PUSH
         table[0xC5] = pushGen(CPU.get_bc);
         table[0xD5] = pushGen(CPU.get_de);
@@ -439,6 +1000,55 @@ pub const GameBoy = struct {
         table[0xE1] = popGen(CPU.set_hl);
         table[0xF1] = popGen(CPU.set_af);
         // ARITHMETIC
+        // ADD
+        table[0x80] = arithmeticGen("a", "b", .add);
+        table[0x81] = arithmeticGen("a", "c", .add);
+        table[0x82] = arithmeticGen("a", "d", .add);
+        table[0x83] = arithmeticGen("a", "e", .add);
+        table[0x84] = arithmeticGen("a", "h", .add);
+        table[0x85] = arithmeticGen("a", "l", .add);
+        table[0x86] = arithmetichlGen("a", .add);
+        table[0x87] = arithmeticGen("a", "a", .add);
+        table[0xC6] = arithmeticu8Gen("a", .add);
+        // ADC
+        table[0x88] = arithmeticGen("a", "b", .adc);
+        table[0x89] = arithmeticGen("a", "c", .adc);
+        table[0x8A] = arithmeticGen("a", "d", .adc);
+        table[0x8B] = arithmeticGen("a", "e", .adc);
+        table[0x8C] = arithmeticGen("a", "h", .adc);
+        table[0x8D] = arithmeticGen("a", "l", .adc);
+        table[0x8E] = arithmetichlGen("a", .adc);
+        table[0x8F] = arithmeticGen("a", "a", .adc);
+        table[0xCE] = arithmeticu8Gen("a", .adc);
+        // SUB
+        table[0x90] = arithmeticGen("a", "b", .sub);
+        table[0x91] = arithmeticGen("a", "c", .sub);
+        table[0x92] = arithmeticGen("a", "d", .sub);
+        table[0x93] = arithmeticGen("a", "e", .sub);
+        table[0x94] = arithmeticGen("a", "h", .sub);
+        table[0x95] = arithmeticGen("a", "l", .sub);
+        table[0x96] = arithmetichlGen("a", .sub);
+        table[0x97] = arithmeticGen("a", "a", .sub);
+        table[0xD6] = arithmeticu8Gen("a", .sub);
+        // SBC
+        table[0x98] = arithmeticGen("a", "b", .sbc);
+        table[0x99] = arithmeticGen("a", "c", .sbc);
+        table[0x9A] = arithmeticGen("a", "d", .sbc);
+        table[0x9B] = arithmeticGen("a", "e", .sbc);
+        table[0x9C] = arithmeticGen("a", "h", .sbc);
+        table[0x9D] = arithmeticGen("a", "l", .sbc);
+        table[0x9E] = arithmetichlGen("a", .sbc);
+        table[0x9F] = arithmeticGen("a", "a", .sbc);
+        table[0xDE] = arithmeticu8Gen("a", .sbc);
+        // CP
+        table[0xB8] = arithmeticGen("a", "b", .cp);
+        table[0xB9] = arithmeticGen("a", "c", .cp);
+        table[0xBA] = arithmeticGen("a", "d", .cp);
+        table[0xBB] = arithmeticGen("a", "e", .cp);
+        table[0xBC] = arithmeticGen("a", "h", .cp);
+        table[0xBD] = arithmeticGen("a", "l", .cp);
+        table[0xBF] = arithmeticGen("a", "a", .cp);
+        table[0xFE] = arithmeticu8Gen("a", .cp);
         // INC single
         table[0x04] = incGen("b");
         table[0x0C] = incGen("c");
@@ -474,7 +1084,7 @@ pub const GameBoy = struct {
         table[0xA3] = bitwiseGen("e", .and_);
         table[0xA4] = bitwiseGen("h", .and_);
         table[0xA5] = bitwiseGen("l", .and_);
-        // table[0xA6] = opcode.and_hl;
+        table[0xA6] = bitwisehlGen(.and_);
         table[0xA7] = bitwiseGen("a", .and_);
         table[0xA8] = bitwiseGen("b", .xor_);
         table[0xA9] = bitwiseGen("c", .xor_);
@@ -482,7 +1092,7 @@ pub const GameBoy = struct {
         table[0xAB] = bitwiseGen("e", .xor_);
         table[0xAC] = bitwiseGen("h", .xor_);
         table[0xAD] = bitwiseGen("l", .xor_);
-        // table[0xAE] = opcode.xor_hl;
+        table[0xAE] = bitwisehlGen(.xor_);
         table[0xAF] = bitwiseGen("a", .xor_);
         table[0xB0] = bitwiseGen("b", .or_);
         table[0xB1] = bitwiseGen("c", .or_);
@@ -490,8 +1100,12 @@ pub const GameBoy = struct {
         table[0xB3] = bitwiseGen("e", .or_);
         table[0xB4] = bitwiseGen("h", .or_);
         table[0xB5] = bitwiseGen("l", .or_);
-        // table[0xB6] = opcode.or_hl;
-        table[0xB7] = bitwiseGen("a", .and_);
+        table[0xB6] = bitwisehlGen(.or_);
+        table[0xB7] = bitwiseGen("a", .or_);
+        // BITWISE u8
+        table[0xE6] = bitwiseu8Gen(.and_);
+        table[0xF6] = bitwiseu8Gen(.or_);
+        table[0xEE] = bitwiseu8Gen(.xor_);
         // JP
         table[0x18] = opcode.jr;
         table[0xC3] = opcode.jp;
@@ -501,8 +1115,8 @@ pub const GameBoy = struct {
         table[0xDA] = conditionalJumpGen(.jump, .c);
         table[0xD2] = conditionalJumpGen(.jump, .nc);
         table[0x28] = conditionalJumpGen(.relative, .z);
-        table[0x38] = conditionalJumpGen(.relative, .nz);
-        table[0x20] = conditionalJumpGen(.relative, .c);
+        table[0x20] = conditionalJumpGen(.relative, .nz);
+        table[0x38] = conditionalJumpGen(.relative, .c);
         table[0x30] = conditionalJumpGen(.relative, .nc);
         table[0xCC] = conditionalJumpGen(.call, .z);
         table[0xC4] = conditionalJumpGen(.call, .nz);
@@ -522,11 +1136,19 @@ pub const GameBoy = struct {
     }
 
     fn invalidOpcode(gb: *GameBoy) void {
+        const opcode_value = gb.readByte(gb.cpu.pc);
+        std.debug.print("Fetched opcode: 0x{X:0>2}\n", .{opcode_value});
         std.debug.panic("Unimplemented opcode at: 0x{X:04}\n", .{gb.cpu.pc});
     }
 
     pub fn step(gb: *GameBoy, opcode_value: u8) void {
-        dispatch_table[opcode_value](gb);
+        if (opcode_value == 0xCB) {
+            const cb_opcode: u8 = gb.readByte(gb.cpu.pc + 1);
+            cb.cb_dispatch_table[cb_opcode](gb);
+            gb.cpu.pc += 2;
+        } else {
+            dispatch_table[opcode_value](gb);
+        }
     }
 };
 
@@ -543,10 +1165,10 @@ pub fn main(rom: []u8) !void {
     std.debug.print("Game Boy initialized!\n", .{});
 
     while (true) {
-        std.debug.print("PC at: 0x{X:0>4}\n", .{gb.cpu.pc});
+        //std.debug.print("PC at: 0x{X:0>4}\n", .{gb.cpu.pc});
 
         const opcode_value = gb.readByte(gb.cpu.pc);
-        std.debug.print("Fetched opcode: 0x{X:0>2}\n", .{opcode_value});
+        //std.debug.print("Fetched opcode: 0x{X:0>2}\n", .{opcode_value});
         gb.step(opcode_value);
     }
 }
