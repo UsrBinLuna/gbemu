@@ -1,19 +1,10 @@
 const std = @import("std");
 const gb_mod = @import("cpu.zig");
 
-const OpcodeFn = *const fn (gb: *gb_mod.GameBoy) void;
-
 const FLAG_ZERO: u8 = 0b10000000;
 const FLAG_SUB: u8 = 0b01000000;
 const FLAG_HC: u8 = 0b00100000;
 const FLAG_CARRY: u8 = 0b00010000;
-
-fn invalidCB(gb: *gb_mod.GameBoy) void {
-    std.debug.print("Fetched CB opcode: 0x{X:0>2}\n", .{gb.readByte(gb.cpu.pc + 1)});
-    @panic("Invalid CB opcode");
-}
-
-pub const cb_dispatch_table: [256]OpcodeFn = initCBTable();
 
 fn getRegister(gb: *gb_mod.GameBoy, reg: u3) *u8 {
     return switch (reg) {
@@ -28,7 +19,7 @@ fn getRegister(gb: *gb_mod.GameBoy, reg: u3) *u8 {
     };
 }
 
-fn cbOpcodes(gb: *gb_mod.GameBoy) void {
+pub fn cbOpcodes(gb: *gb_mod.GameBoy) void {
     std.debug.print("Fetched CB opcode: 0x{X:0>2}\n", .{gb.readByte(gb.cpu.pc + 1)});
     // get prefix for BIT, RES, SET
     const op: u8 = gb.readByte(gb.cpu.pc + 1);
@@ -195,14 +186,5 @@ fn cbOpcodes(gb: *gb_mod.GameBoy) void {
             },
         }
     }
-}
-
-fn initCBTable() [256]OpcodeFn {
-    var table: [256]OpcodeFn = undefined;
-
-    inline for (0..256) |i| {
-        table[i] = cbOpcodes;
-    }
-
-    return table;
+    gb.cpu.pc += 2;
 }

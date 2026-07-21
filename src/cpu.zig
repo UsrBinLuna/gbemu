@@ -1143,9 +1143,7 @@ pub const GameBoy = struct {
 
     pub fn step(gb: *GameBoy, opcode_value: u8) void {
         if (opcode_value == 0xCB) {
-            const cb_opcode: u8 = gb.readByte(gb.cpu.pc + 1);
-            cb.cb_dispatch_table[cb_opcode](gb);
-            gb.cpu.pc += 2;
+            cb.cbOpcodes(gb);
         } else {
             dispatch_table[opcode_value](gb);
         }
