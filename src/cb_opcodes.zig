@@ -193,7 +193,6 @@ fn cbOpcodes(gb: *gb_mod.GameBoy) void {
                 gb.cpu.unset_flag(FLAG_HC);
                 gb.cpu.unset_flag(FLAG_SUB);
             },
-            else => unreachable,
         }
     }
 }
