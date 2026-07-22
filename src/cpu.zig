@@ -165,7 +165,9 @@ pub const GameBoy = struct {
     fn ldRHLGen(comptime dst: []const u8) OpcodeFn {
         return struct {
             fn f(gb: *GameBoy) void {
-                @field(gb.cpu, dst) = gb.readByte(gb.cpu.get_hl());
+                const addr = gb.cpu.get_hl();
+                const value = gb.readByte(addr);
+                @field(gb.cpu, dst) = value;
                 gb.cpu.pc += 1;
             }
         }.f;
@@ -175,7 +177,9 @@ pub const GameBoy = struct {
     fn ldHLRGen(comptime src: []const u8) OpcodeFn {
         return struct {
             fn f(gb: *GameBoy) void {
-                gb.writeByte(gb.cpu.get_hl(), @field(gb.cpu, src));
+                const addr = gb.cpu.get_hl();
+                const value = @field(gb.cpu, src);
+                gb.writeByte(addr, value);
                 gb.cpu.pc += 1;
             }
         }.f;
@@ -1094,6 +1098,7 @@ pub const GameBoy = struct {
         table[0xBB] = arithmeticGen("a", "e", .cp);
         table[0xBC] = arithmeticGen("a", "h", .cp);
         table[0xBD] = arithmeticGen("a", "l", .cp);
+        table[0xBE] = arithmetichlGen("a", .cp);
         table[0xBF] = arithmeticGen("a", "a", .cp);
         table[0xFE] = arithmeticu8Gen("a", .cp);
         // INC single
