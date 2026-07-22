@@ -36,21 +36,24 @@ pub const CPU = struct {
     sp: u16 = 0,
     pc: u16 = 0,
     ime: bool = false,
+    ime_queued: u8 = 0,
+
+    stopped: bool = false,
 
     pub fn get_af(self: CPU) u16 {
-        return (@as(u16, self.a) << 8) | self.f;
+        return (@as(u16, self.a) << 8) | @as(u16, self.f);
     }
 
     pub fn get_bc(self: CPU) u16 {
-        return (@as(u16, self.b) << 8) | self.c;
+        return (@as(u16, self.b) << 8) | @as(u16, self.c);
     }
 
     pub fn get_de(self: CPU) u16 {
-        return (@as(u16, self.d) << 8) | self.e;
+        return (@as(u16, self.d) << 8) | @as(u16, self.e);
     }
 
     pub fn get_hl(self: CPU) u16 {
-        return (@as(u16, self.h) << 8) | self.l;
+        return (@as(u16, self.h) << 8) | @as(u16, self.l);
     }
 
     pub fn set_af(self: *CPU, value: u16) void {
@@ -74,11 +77,11 @@ pub const CPU = struct {
     }
 
     pub fn set_flag(self: *CPU, flag: u8) void {
-        self.f |= flag;
+        self.f = (self.f | flag) & 0xF0;
     }
 
     pub fn unset_flag(self: *CPU, flag: u8) void {
-        self.f &= ~flag;
+        self.f = (self.f & ~flag) & 0xF0;
     }
 
     pub fn get_flag(self: *CPU, flag: u8) u8 {
@@ -998,6 +1001,7 @@ pub const GameBoy = struct {
         table[0x66] = ldRHLGen("h");
         table[0x6E] = ldRHLGen("l");
         table[0x7E] = ldRHLGen("a");
+        table[0xF9] = opcode.ldsp_hl;
         // LD address HL, {register}
         table[0x70] = ldHLRGen("b");
         table[0x71] = ldHLRGen("c");
@@ -1139,6 +1143,8 @@ pub const GameBoy = struct {
         table[0xB5] = bitwiseGen("l", .or_);
         table[0xB6] = bitwisehlGen(.or_);
         table[0xB7] = bitwiseGen("a", .or_);
+        table[0x2F] = opcode.cpl;
+        table[0x3F] = opcode.ccf;
         // BITWISE u8
         table[0xE6] = bitwiseu8Gen(.and_);
         table[0xF6] = bitwiseu8Gen(.or_);
@@ -1166,6 +1172,7 @@ pub const GameBoy = struct {
         table[0xD0] = conditionalJumpGen(.ret, .nc);
         // interrupts
         table[0xF3] = opcode.di;
+        table[0xFB] = opcode.ei;
         // CALLs
         table[0xC9] = opcode.ret;
         table[0xCD] = opcode.call;
@@ -1176,6 +1183,9 @@ pub const GameBoy = struct {
         table[0x1F] = opcode.rra;
         // weird arithmetics
         table[0x27] = opcode.daa;
+        // gameboy stuff
+        table[0x10] = opcode.stop;
+        table[0x76] = opcode.halt;
 
         return table;
     }
@@ -1192,6 +1202,13 @@ pub const GameBoy = struct {
         } else {
             dispatch_table[opcode_value](gb);
         }
+
+        if (gb.cpu.ime_queued > 0) {
+            gb.cpu.ime_queued -= 1;
+            if (gb.cpu.ime_queued == 0) {
+                gb.cpu.ime = true;
+            }
+        }
     }
 };
 
@@ -1207,7 +1224,7 @@ pub fn main(rom: []u8) !void {
 
     std.debug.print("Game Boy initialized!\n", .{});
 
-    while (true) {
+    while (!gb.cpu.stopped) {
         //std.debug.print("PC at: 0x{X:0>4}\n", .{gb.cpu.pc});
 
         const opcode_value = gb.readByte(gb.cpu.pc);

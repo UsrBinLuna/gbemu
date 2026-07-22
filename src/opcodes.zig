@@ -266,6 +266,11 @@ pub fn inc_sp(gb: *gb_mod.GameBoy) void {
     gb.cpu.sp +%= 1;
 }
 
+pub fn ldsp_hl(gb: *gb_mod.GameBoy) void {
+    gb.cpu.sp = gb.cpu.get_hl();
+    gb.cpu.pc += 1;
+}
+
 // rotations
 pub fn rlca(gb: *gb_mod.GameBoy) void {
     const old: u8 = gb.cpu.a >> 7;
@@ -363,6 +368,8 @@ pub fn daa(gb: *gb_mod.GameBoy) void {
         if (gb.cpu.a > 0x99 or carry_bit != 0) {
             modify += 0x60;
             gb.cpu.set_flag(FLAG_CARRY);
+        } else {
+            gb.cpu.unset_flag(FLAG_CARRY);
         }
         gb.cpu.a +%= modify;
     } else { // subtraction
@@ -377,6 +384,26 @@ pub fn daa(gb: *gb_mod.GameBoy) void {
 
     if (gb.cpu.a == 0) gb.cpu.set_flag(FLAG_ZERO) else gb.cpu.unset_flag(FLAG_ZERO);
     gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
+pub fn cpl(gb: *gb_mod.GameBoy) void {
+    gb.cpu.a = ~gb.cpu.a;
+    gb.cpu.set_flag(FLAG_SUB);
+    gb.cpu.set_flag(FLAG_HC);
+    gb.cpu.pc += 1;
+}
+
+pub fn ccf(gb: *gb_mod.GameBoy) void {
+    const carry: u8 = @intFromBool(gb.cpu.get_flag(FLAG_CARRY) != 0);
+    if (carry != 0) {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.set_flag(FLAG_CARRY);
+    }
+    gb.cpu.unset_flag(FLAG_SUB);
+    gb.cpu.unset_flag(FLAG_HC);
+    gb.cpu.pc += 1;
 }
 
 // jumps
@@ -393,6 +420,14 @@ pub fn jp(gb: *gb_mod.GameBoy) void {
 
 pub fn di(gb: *gb_mod.GameBoy) void {
     gb.cpu.ime = false;
+    gb.cpu.ime_queued = 0;
+    gb.cpu.pc += 1;
+}
+
+pub fn ei(gb: *gb_mod.GameBoy) void {
+    if (!gb.cpu.ime and gb.cpu.ime_queued == 0) {
+        gb.cpu.ime_queued = 2;
+    }
     gb.cpu.pc += 1;
 }
 
@@ -406,4 +441,15 @@ pub fn call(gb: *gb_mod.GameBoy) void {
 pub fn ret(gb: *gb_mod.GameBoy) void {
     const address: u16 = gb.pop_u16();
     gb.cpu.pc = address;
+}
+
+// i hate the gameboy hardware
+pub fn stop(gb: *gb_mod.GameBoy) void {
+    gb.cpu.pc += 2;
+    gb.cpu.stopped = true;
+}
+
+// TODO: halt instead of just NOPing
+pub fn halt(gb: *gb_mod.GameBoy) void {
+    gb.cpu.pc += 1;
 }
