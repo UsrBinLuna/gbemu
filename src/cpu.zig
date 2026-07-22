@@ -98,6 +98,8 @@ pub const GameBoy = struct {
     pub fn readByte(self: *GameBoy, address: u16) u8 {
         switch (address) {
             0x0000...0x7FFF => return self.rom[@as(usize, address)],
+            0xC000...0xDFFF => return self.memory[address],
+            0xE000...0xFDFF => return self.memory[address - 0x2000],
             else => return self.memory[address],
             // todo: add vram and stuff
         }
@@ -110,7 +112,11 @@ pub const GameBoy = struct {
             // todo: bank switching
             return;
         }
-        self.memory[address] = value;
+        switch (address) {
+            0xC000...0xDFFF => self.memory[address] = value,
+            0xE000...0xFDFF => self.memory[address - 0x2000] = value,
+            else => self.memory[address] = value,
+        }
         if (address == 0xFF02 and value == 0x81) {
             std.debug.print("{c}", .{self.memory[0xFF01]});
             self.memory[0xFF02] = 0;
