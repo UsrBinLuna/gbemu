@@ -1174,6 +1174,8 @@ pub const GameBoy = struct {
         table[0x0F] = opcode.rrca;
         table[0x17] = opcode.rla;
         table[0x1F] = opcode.rra;
+        // weird arithmetics
+        table[0x27] = opcode.daa;
 
         return table;
     }

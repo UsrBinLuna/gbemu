@@ -349,6 +349,36 @@ pub fn rra(gb: *gb_mod.GameBoy) void {
     gb.cpu.pc += 1;
 }
 
+// what in the WORLD
+pub fn daa(gb: *gb_mod.GameBoy) void {
+    const sub_bit: u8 = @intFromBool(gb.cpu.get_flag(FLAG_SUB) != 0);
+    const half_bit: u8 = @intFromBool(gb.cpu.get_flag(FLAG_HC) != 0);
+    const carry_bit: u8 = @intFromBool(gb.cpu.get_flag(FLAG_CARRY) != 0);
+    var modify: u8 = 0;
+
+    if (sub_bit == 0) { // addition
+        if ((gb.cpu.a & 0x0F) > 0x9 or half_bit != 0) {
+            modify += 0x06;
+        }
+        if (gb.cpu.a > 0x99 or carry_bit != 0) {
+            modify += 0x60;
+            gb.cpu.set_flag(FLAG_CARRY);
+        }
+        gb.cpu.a +%= modify;
+    } else { // subtraction
+        if (half_bit != 0) {
+            modify += 0x06;
+        }
+        if (carry_bit != 0) {
+            modify += 0x60;
+        }
+        gb.cpu.a -%= modify;
+    }
+
+    if (gb.cpu.a == 0) gb.cpu.set_flag(FLAG_ZERO) else gb.cpu.unset_flag(FLAG_ZERO);
+    gb.cpu.unset_flag(FLAG_HC);
+}
+
 // jumps
 pub fn jr(gb: *gb_mod.GameBoy) void {
     const offset: i16 = @intCast(@as(i8, @bitCast(gb.readByte(gb.cpu.pc + 1))));
