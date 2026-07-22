@@ -152,24 +152,108 @@ pub fn ldu16_sp(gb: *gb_mod.GameBoy) void {
     gb.cpu.pc += 3;
 }
 
-pub fn incmem_hl(gb: *gb_mod.GameBoy) void {
-    const address: u16 = gb.cpu.get_hl();
-    const old_value: u8 = gb.readByte(address);
-    const new_value: u8 = old_value +% 1;
-    gb.writeByte(address, new_value);
+// more (hl) things
+pub fn inc_hl(gb: *gb_mod.GameBoy) void {
+    const addr: u16 = gb.cpu.get_hl();
+    const old: u8 = gb.readByte(addr);
+    const value: u8 = old +% 1;
+    gb.writeByte(addr, value);
 
     // flags
     gb.cpu.unset_flag(FLAG_SUB);
-    if (new_value == 0) {
+    if (value == 0) {
         gb.cpu.set_flag(FLAG_ZERO);
     } else {
         gb.cpu.unset_flag(FLAG_ZERO);
     }
-    if ((old_value & 0x0F) == 0x0F) {
+    if ((old & 0x0F) == 0x0F) {
         gb.cpu.set_flag(FLAG_HC);
     } else {
         gb.cpu.unset_flag(FLAG_HC);
     }
+    gb.cpu.pc += 1;
+}
+
+pub fn dec_hl(gb: *gb_mod.GameBoy) void {
+    const addr: u16 = gb.cpu.get_hl();
+    const old: u8 = gb.readByte(addr);
+    const value: u8 = old -% 1;
+    gb.writeByte(addr, value);
+
+    // flags
+    gb.cpu.set_flag(FLAG_SUB);
+    if (value == 0) {
+        gb.cpu.set_flag(FLAG_ZERO);
+    } else {
+        gb.cpu.unset_flag(FLAG_ZERO);
+    }
+    if ((old & 0x0F) == 0x0F) {
+        gb.cpu.set_flag(FLAG_HC);
+    } else {
+        gb.cpu.unset_flag(FLAG_HC);
+    }
+    gb.cpu.pc += 1;
+}
+
+pub fn addhl_sp(gb: *gb_mod.GameBoy) void {
+    const hl: u16 = gb.cpu.get_hl();
+
+    if (@as(u32, hl) + @as(u32, gb.cpu.sp) > 0xFFFF) {
+        gb.cpu.set_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    }
+
+    if ((hl & 0x0FFF) + (gb.cpu.sp & 0x0FFF) > 0x0FFF) {
+        gb.cpu.set_flag(FLAG_HC);
+    } else {
+        gb.cpu.unset_flag(FLAG_HC);
+    }
+
+    // flags
+    gb.cpu.unset_flag(FLAG_SUB);
+
+    gb.cpu.set_hl(hl +% gb.cpu.sp);
+    gb.cpu.pc += 1;
+}
+
+pub fn jp_hl(gb: *gb_mod.GameBoy) void {
+    gb.cpu.pc = gb.cpu.get_hl();
+}
+
+pub fn ldhl_spi8(gb: *gb_mod.GameBoy) void {
+    const raw_offset = gb.readByte(gb.cpu.pc + 1);
+    const offset: u16 = @bitCast(@as(i16, @as(i8, @bitCast(raw_offset))));
+    const result: u16 = gb.cpu.sp +% offset;
+
+    if ((gb.cpu.sp & 0x0F) + (raw_offset & 0x0F) > 0x0F) {
+        gb.cpu.set_flag(FLAG_HC);
+    } else {
+        gb.cpu.unset_flag(FLAG_HC);
+    }
+
+    if ((gb.cpu.sp & 0xFF) + raw_offset > 0xFF) {
+        gb.cpu.set_flag(FLAG_CARRY);
+    } else {
+        gb.cpu.unset_flag(FLAG_CARRY);
+    }
+    gb.cpu.unset_flag(FLAG_ZERO);
+    gb.cpu.unset_flag(FLAG_SUB);
+
+    gb.cpu.set_hl(result);
+    gb.cpu.pc += 2;
+}
+
+// more loads that arent enough to deserve their own generator
+pub fn ldaddr_bc(gb: *gb_mod.GameBoy) void {
+    const addr: u16 = gb.cpu.get_bc();
+    gb.writeByte(addr, gb.cpu.a);
+    gb.cpu.pc += 1;
+}
+
+pub fn ldaddr_de(gb: *gb_mod.GameBoy) void {
+    const addr: u16 = gb.cpu.get_de();
+    gb.writeByte(addr, gb.cpu.a);
     gb.cpu.pc += 1;
 }
 
@@ -267,9 +351,9 @@ pub fn rra(gb: *gb_mod.GameBoy) void {
 
 // jumps
 pub fn jr(gb: *gb_mod.GameBoy) void {
-    const pc: i16 = @intCast(gb.cpu.pc);
     const offset: i16 = @intCast(@as(i8, @bitCast(gb.readByte(gb.cpu.pc + 1))));
-    gb.cpu.pc = @intCast(pc + 2 + offset);
+    const next_pc: i32 = @as(i32, gb.cpu.pc) + 2 + offset; // i32 conversion important so theres no overflow
+    gb.cpu.pc = @truncate(@as(u32, @bitCast(next_pc))); // truncate back to u16
 }
 
 pub fn jp(gb: *gb_mod.GameBoy) void {

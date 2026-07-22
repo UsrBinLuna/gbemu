@@ -102,7 +102,7 @@ pub const GameBoy = struct {
 
     pub fn writeByte(self: *GameBoy, address: u16, value: u8) void {
         // rom banking areas (todo: mbc)
-        std.debug.print("WRITE {x} = {x}\n", .{ address, value });
+        //std.debug.print("WRITE {x} = {x}\n", .{ address, value });
         if (address < 0x8000) {
             // todo: bank switching
             return;
@@ -824,6 +824,33 @@ pub const GameBoy = struct {
         }.f;
     }
 
+    fn addhlpairGen(comptime get: anytype) OpcodeFn {
+        return struct {
+            fn f(gb: *GameBoy) void {
+                const hl: u16 = gb.cpu.get_hl();
+                const val: u16 = get(gb.cpu);
+
+                if (@as(u32, hl) + @as(u32, val) > 0xFFFF) {
+                    gb.cpu.set_flag(FLAG_CARRY);
+                } else {
+                    gb.cpu.unset_flag(FLAG_CARRY);
+                }
+
+                if ((hl & 0x0FFF) + (val & 0x0FFF) > 0x0FFF) {
+                    gb.cpu.set_flag(FLAG_HC);
+                } else {
+                    gb.cpu.unset_flag(FLAG_HC);
+                }
+
+                // flags
+                gb.cpu.unset_flag(FLAG_SUB);
+
+                gb.cpu.set_hl(hl +% val);
+                gb.cpu.pc += 1;
+            }
+        }.f;
+    }
+
     fn conditionalJumpGen(comptime jump: Jumps, comptime condition: Conditions) OpcodeFn {
         return struct {
             fn f(gb: *GameBoy) void {
@@ -859,9 +886,9 @@ pub const GameBoy = struct {
                             gb.cpu.pc = address;
                         },
                         .relative => {
-                            const pc: i16 = @intCast(gb.cpu.pc);
                             const offset: i16 = @intCast(@as(i8, @bitCast(gb.readByte(gb.cpu.pc + 1))));
-                            gb.cpu.pc = @intCast(pc + 2 + offset);
+                            const next_pc: i32 = @as(i32, gb.cpu.pc) + 2 + offset; // i32 conversion important so theres no overflow
+                            gb.cpu.pc = @truncate(@as(u32, @bitCast(next_pc))); // truncate back to u16
                         },
                         .ret => {
                             const address: u16 = gb.pop_u16();
@@ -899,6 +926,9 @@ pub const GameBoy = struct {
         table[0x01] = opcode.ldbc;
         table[0x11] = opcode.ldde;
         table[0x21] = opcode.ldhl;
+        // LD {register pair, A}
+        table[0x02] = opcode.ldaddr_bc;
+        table[0x12] = opcode.ldaddr_de;
         // LD {address}, {register}
         table[0xE0] = opcode.loadmem_ffval;
         table[0xEA] = opcode.loadmem_a;
@@ -989,6 +1019,8 @@ pub const GameBoy = struct {
         table[0xFA] = opcode.lda_u16;
         // LD address u16, reg
         table[0x08] = opcode.ldu16_sp;
+        // other loads
+        table[0xF8] = opcode.ldhl_spi8;
         // PUSH
         table[0xC5] = pushGen(CPU.get_bc);
         table[0xD5] = pushGen(CPU.get_de);
@@ -1010,6 +1042,11 @@ pub const GameBoy = struct {
         table[0x86] = arithmetichlGen("a", .add);
         table[0x87] = arithmeticGen("a", "a", .add);
         table[0xC6] = arithmeticu8Gen("a", .add);
+        // ADD HL pairs
+        table[0x09] = addhlpairGen(CPU.get_bc);
+        table[0x19] = addhlpairGen(CPU.get_de);
+        table[0x29] = addhlpairGen(CPU.get_hl);
+        table[0x39] = opcode.addhl_sp;
         // ADC
         table[0x88] = arithmeticGen("a", "b", .adc);
         table[0x89] = arithmeticGen("a", "c", .adc);
@@ -1056,14 +1093,13 @@ pub const GameBoy = struct {
         table[0x1C] = incGen("e");
         table[0x24] = incGen("h");
         table[0x2C] = incGen("l");
+        table[0x34] = opcode.inc_hl;
         table[0x3C] = incGen("a");
         // INC pairs
         table[0x03] = incGenPair(CPU.get_bc, CPU.set_bc);
         table[0x13] = incGenPair(CPU.get_de, CPU.set_de);
         table[0x23] = incGenPair(CPU.get_hl, CPU.set_hl);
         table[0x33] = opcode.inc_sp;
-        // INC mem
-        table[0x34] = opcode.incmem_hl;
         // DEC single
         table[0x05] = decGen("b");
         table[0x0D] = decGen("c");
@@ -1071,6 +1107,7 @@ pub const GameBoy = struct {
         table[0x1D] = decGen("e");
         table[0x25] = decGen("h");
         table[0x2D] = decGen("l");
+        table[0x35] = opcode.dec_hl;
         table[0x3D] = decGen("a");
         // DEC pairs
         table[0x0B] = decGenPair(CPU.get_bc, CPU.set_bc);
@@ -1109,6 +1146,7 @@ pub const GameBoy = struct {
         // JP
         table[0x18] = opcode.jr;
         table[0xC3] = opcode.jp;
+        table[0xE9] = opcode.jp_hl;
         // conditional jumps
         table[0xCA] = conditionalJumpGen(.jump, .z);
         table[0xC2] = conditionalJumpGen(.jump, .nz);
