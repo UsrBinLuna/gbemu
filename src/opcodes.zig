@@ -443,6 +443,12 @@ pub fn ret(gb: *gb_mod.GameBoy) void {
     gb.cpu.pc = address;
 }
 
+pub fn reti(gb: *gb_mod.GameBoy) void {
+    const address: u16 = gb.pop_u16();
+    gb.cpu.pc = address;
+    gb.cpu.ime = true;
+}
+
 // i hate the gameboy hardware
 pub fn stop(gb: *gb_mod.GameBoy) void {
     gb.cpu.pc += 2;
